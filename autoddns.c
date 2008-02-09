@@ -3,7 +3,10 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 #include <pthread.h>
+#include <errno.h>
 #include "iplist.h"
 #include "watchip.h"
 #include "dnsquery.h"
@@ -37,15 +40,17 @@ int c;
 int filter_sense = 0;
 int enable4 = 1;
 int enable6 = 1;
+int detach = 1;
 int verbose = 0;
 int default_family = 1;
 int default_ttl = -1;
 int max6_ttl = 86400;
 int use_valid = 0;
+int pipefd[2];
 char *hostname = NULL;
 struct filter_list *intf_filter = NULL;
 
-	while ((c = getopt(argc, argv, "46t:m:Vvh:i:")) != EOF) {
+	while ((c = getopt(argc, argv, "46t:m:Vvh:i:d")) != EOF) {
 		switch (c) {
 			case 'i':
 				c = (optarg[0] == '!') ? -1 : 1;
@@ -94,6 +99,9 @@ struct filter_list *intf_filter = NULL;
 			case 'V':
 				use_valid = 1;
 				break;
+			case 'd':
+				detach = 0;
+				break;
 			case 'v':
 				verbose = 1;
 				break;
@@ -105,8 +113,7 @@ struct filter_list *intf_filter = NULL;
 				break;
 		}
 	}
-
-	dnsquery_set_verbose(verbose);
+	if (verbose) detach = 0;
 
 	if (enable4 && (default_ttl == -1)) {
 		err = 1;
@@ -123,20 +130,61 @@ struct filter_list *intf_filter = NULL;
 			argv[0]);
 	}
 	if (err || (optind == argc)) {
-		fprintf(stderr, "Usage: %s [-4|6] [-v] [-V] [-t DNS_ttl] [-m DNS_ttl] [-h hostname] \\\n"
+		fprintf(stderr, "Usage: %s [-4|6] [-v|d] [-V] [-t DNS_ttl] [-m DNS_ttl] [-h hostname] \\\n"
 			"          [-i [!]interface[,interface]] -- nsupdate command line\n"
-			" -4|6: Enable IPv4 or IPv6 (default is both)\n"
+			" -4|6: Enable IPv4 or IPv6 (default is both enabled)\n"
 			"   -V: Use valid lifetime as DNS TTL instead of prefered lifetime\n"
-			"   -v: verbose\n"
+			"   -v: verbose (implies -d)\n"
+			"   -d: do not fork and detach into background\n"
 			"   -i: consider only named interfaces (with !, consider all except named)\n"
 			"   -t: Specify DNS TTL to use for IPv4 addresses\n"
 			"   -m: Specify DNS TTL to use for IPv6 addresses with infinite lifetime\n"
 			"   -h: Override the local hostname\n"
-			"nsupdate comand line is typically \"nsupdate -k keyfile\"\n",
+			"nsupdate comand line is typically \"nsupdate -k keyfile\"\n"
+			"Hint: use -d or -v and \"cat\" as the nsupdate command as a simulation mode\n",
 			argv[0]
 		);
 		return 2;
 	}
+
+	if (detach) {
+		if (pipe(&(pipefd[0])) < 0) {
+			fprintf(stderr,
+				"%s: pipe() failed while trying go in background: %s\n",
+				argv[0], strerror(errno)
+			);
+			return 1;
+		}
+		if ((c = fork()) < 0) {
+			fprintf(stderr,
+				"%s: fork() failed while trying go in background: %s\n",
+				argv[0], strerror(errno)
+			);
+			return 1;
+		}
+		if (c != 0) {
+			char buf[2];
+			int n;
+
+			/* parent just waits for the child to be initialized */
+			close(pipefd[1]);
+			n = read(pipefd[0], buf, 1);
+			if (n < 1) {
+				waitpid(c, &n, 0);
+				if (WIFEXITED(n) && (WEXITSTATUS(n) > 0)) {
+					_exit(WEXITSTATUS(n));
+				}
+				_exit(1);
+			}
+			_exit(0);
+		}
+		setsid();
+		close(0);
+		open("/dev/null", O_RDONLY);
+		close(pipefd[0]);
+	}
+
+	dnsquery_set_verbose(verbose);
 
 	if (!(ipl = iplist_new(verbose, enable4, enable6))) {
 		return 1;
@@ -151,6 +199,18 @@ struct filter_list *intf_filter = NULL;
 
 	if (!(dnsupdate_start(ipl, verbose, hostname, argv + optind))) {
 		return 1;
+	}
+
+	if (detach) {
+		char buf[2];
+
+		buf[0] = 0;
+		close(1);
+		close(2);
+		open("/dev/null", O_WRONLY);
+		dup(1);
+		write(pipefd[1], buf, 1);
+		close(pipefd[1]);
 	}
 
 	watchip(w);

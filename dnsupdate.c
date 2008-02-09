@@ -150,7 +150,7 @@ char ipbuf[64];
 	free(server);
 
 	for (;;) {
-		waitpid(pid, &n, 0);
+		while (waitpid(pid, &n, 0) < 0) sleep(1);
 		if (WIFEXITED(n)) break;
 		kill(pid, SIGCONT);
 	}
