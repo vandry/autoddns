@@ -1,0 +1,29 @@
+#! /bin/sh
+
+test -x /usr/local/sbin/autoddns || exit 0
+
+AUTODDNS_OPTS="-t 3600 -i eth0 -- nsupdate -k /usr/local/etc/Khostname.+9999+9999.private"
+
+case "$1" in
+	start)
+		echo -n "Starting Automatic DDNS updater: autoddns"
+		start-stop-daemon --start --quiet --exec /usr/local/sbin/autoddns -- $AUTODDNS_OPTS
+		echo "."
+		;;
+	stop)
+		echo -n "Stopping Automatic DDNS updater: autoddns"
+		start-stop-daemon --stop --quiet --oknodo --exec /usr/local/sbin/autoddns
+		echo "."
+		;;
+	restart|reload|force-reload)
+		echo -n "Restarting Automatic DDNS updater: autoddns"
+		start-stop-daemon --stop --quiet --exec /usr/local/sbin/autoddns
+		start-stop-daemon --start --quiet --exec /usr/local/sbin/autoddns -- $AUTODDNS_OPTS
+		echo "."
+		;;
+	*)
+		echo "Usage: /etc/init.d/autoddns {start|stop|restart}"
+		exit 1
+esac
+
+exit 0
