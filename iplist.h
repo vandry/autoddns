@@ -15,7 +15,7 @@ int iplist_notify(struct iplist *, int isremove, int ttl, int family, unsigned c
 
 #define IPLIST_NOHANG 0 /* no blocking */
 #define IPLIST_HANG 1 /* no timeout */
-#define IPLIST_TIMED 1 /* with timeout */
+#define IPLIST_TIMED 2 /* with timeout */
 struct ipl *iplist_getwork(struct iplist *, time_t end_time, int how);
 
 int iplist_count_addresses(struct iplist *);
