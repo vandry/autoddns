@@ -18,8 +18,8 @@ struct watchip {
 	struct iplist *iplist;
 	int netlink_socket;
 	int use_valid;
-	int enable4;
-	int enable6;
+	struct ip_filter_list *filter4;
+	struct ip_filter_list *filter6;
 	int default_ttl;
 	int max6_ttl;
 	int pending_init;
@@ -34,42 +34,331 @@ struct filter_list {
 	int id;
 };
 
+struct ip_filter_list {
+	struct ip_filter_list *next;
+	int accept;
+	int plen;
+	unsigned char addr[16];
+};
+
 int
-watchip_filter_add(struct filter_list **fp, char *name)
+watchip_intf_filter_add(struct watchip_param *p, char *arg)
 {
-int len = strlen(name);
+char *s;
+int len;
+int filter_sense;
 struct filter_list *result;
 
-	if (!(result = malloc(sizeof(*result) + len + 1))) {
-		fprintf(stderr, "watchip_filter_add: malloc failed\n");
+	while (arg) {
+		if (s = strchr(arg, ',')) *(s++) = 0;
+
+		filter_sense = 1;
+		if (arg[0] == '!') {
+			filter_sense = -1;
+			arg++;
+		}
+		if (*arg) {
+			if (
+				(p->intf_filter_sense) != 0 &&
+				(filter_sense != (p->intf_filter_sense))
+			) {
+				fprintf(stderr,
+					"%s: cannot mix \"-i include\" with \"-i !exclude\"\n",
+					p->progname
+				);
+				return 1;
+			}
+			p->intf_filter_sense = filter_sense;
+
+			len = strlen(arg);
+			if (!(result = malloc(sizeof(*result) + len + 1))) {
+				fprintf(stderr, "%s: watchip_filter_add: malloc failed\n", p->progname);
+				return 2;
+			}
+			memset(result, 0, sizeof(*result));
+			result->interface = ((char *)result) + sizeof(*result);
+			strcpy(result->interface, arg);
+			result->next = p->intf_filter;
+			p->intf_filter = result;
+		} else {
+			fprintf(stderr, "%s: need an interface name after -i\n", p->progname);
+		}
+		arg = s;
+	}
+
+	return 0;
+}
+
+int
+watchip_ip_filter_add(struct watchip_param *p, char *arg)
+{
+char *s, *q, *r;
+char *arg_copy;
+int plen;
+int filter_sense;
+struct ip_filter_list *new;
+struct ip_filter_list **fp;
+
+	if (!(arg_copy = strdup(arg))) {
+		fprintf(stderr, "%s: watchip_ip_filter_add: malloc failed\n", p->progname);
+		return 2;
+	}
+	arg = arg_copy;
+
+	while (arg) {
+		if (s = strchr(arg, ',')) *(s++) = 0;
+
+		filter_sense = 1;
+		if (arg[0] == '!') {
+			filter_sense = 0;
+			arg++;
+		}
+		if (*arg) {
+			if (!(new = malloc(sizeof(*new)))) {
+				fprintf(stderr, "%s: watchip_ip_filter_add: malloc failed\n", p->progname);
+				free(arg_copy);
+				return 2;
+			}
+			memset(new, 0, sizeof(*new));
+
+			plen = -1;
+			if (q = strchr(arg, '/')) {
+				*(q++) = 0;
+				if (*q) {
+					plen = strtoul(q, &r, 10);
+					if (*r) plen = -1;
+				}
+				if ((plen < 0) || (plen > 128)) {
+					q[-1] = '/';
+					fprintf(stderr, "%s: watchip_ip_filter_add: cannot parse address \"%s\", syntax is addr/prefix-length\n", p->progname, arg);
+					free(new);
+					free(arg_copy);
+					return 1;
+				}
+			}
+
+			if (strchr(arg, '.')) {
+				if (strchr(arg, ':')) {
+					fprintf(stderr,
+						"%s: watchip_ip_filter_add: address \"%s\" contains both \".\" and \":\"\n"
+						"%s: IPv4 addresses should contain only \".\", IPv6, only \":\"\n",
+						p->progname, arg, p->progname
+					);
+					free(new);
+					free(arg_copy);
+					return 1;
+				}
+				fp = &(p->filter4);
+
+				if (inet_pton(AF_INET, arg, &(new->addr)) < 1) {
+					fprintf(stderr,
+						"%s: watchip_ip_filter_add: cannot parse IPv4 address \"%s\"\n",
+						p->progname, arg
+					);
+					free(new);
+					free(arg_copy);
+					return 1;
+				}
+
+				new->plen = ((plen < 0) || (plen > 32)) ? 32 : plen;
+			} else if (strchr(arg, ':')) {
+				fp = &(p->filter6);
+
+				if (inet_pton(AF_INET6, arg, &(new->addr)) < 1) {
+					fprintf(stderr,
+						"%s: watchip_ip_filter_add: cannot parse IPv6 address \"%s\"\n",
+						p->progname, arg
+					);
+					free(new);
+					free(arg_copy);
+					return 1;
+				}
+
+				new->plen = (plen < 0) ? 128 : plen;
+			} else {
+				fprintf(stderr,
+					"%s: watchip_ip_filter_add: cannot interpret \"%s\" as an IP address\n",
+					p->progname, arg
+				);
+				free(new);
+				free(arg_copy);
+				return 1;
+			}
+
+			new->accept = filter_sense;
+
+			new->next = *fp;
+			*fp = new;
+		} else {
+			fprintf(stderr, "%s: need an interface name after -a\n", p->progname);
+		}
+		arg = s;
+	}
+	
+	free(arg_copy);
+	return 0;
+}
+
+static void
+filter_free(struct ip_filter_list *l)
+{
+struct ip_filter_list *tmp;
+
+	while (l) {
+		tmp = l->next;
+		free(l);
+		l = tmp;
+	}
+}
+
+/* If the last entry in a filter is a reject, then the user surely
+   intended for the filter to accept by default (else the last entry
+   would be a noop) -> add an entry to accept everything
+
+   Likewise, If the last entry in a filter is an accept, then do
+   nothing
+*/
+static int
+maybe_default_accept(struct ip_filter_list **fp)
+{
+struct ip_filter_list *new;
+
+	if ((*fp)->accept > 0) return 1;
+
+	if (!(new = malloc(sizeof(*new)))) {
+		fprintf(stderr, "maybe_default_accept: malloc failure\n");
 		return 0;
 	}
-	memset(result, 0, sizeof(*result));
-	result->interface = ((char *)result) + sizeof(*result);
-	strcpy(result->interface, name);
-	result->next = *fp;
-	*fp = result;
+	memset(new, 0, sizeof(*new));
+
+	new->accept = 1;
+	new->next = *fp;
+	*fp = new;
 	return 1;
 }
 
+static struct ip_filter_list *
+reverselist(struct ip_filter_list *l1)
+{
+struct ip_filter_list *l2 = NULL;
+struct ip_filter_list *tmp;
+
+	while (l1) {
+		tmp = l1;
+		l1 = l1->next;
+		tmp->next = l2;
+		l2 = tmp;
+	}
+	return l2;
+}
+
+static void
+dumplist(struct ip_filter_list *l, int family)
+{
+char buf[64];
+
+	while (l) {
+		inet_ntop(family, &(l->addr), buf, sizeof(buf));
+		fprintf(stdout, "  %s %s/%d\n",
+			(l->accept > 0) ? "permit" : "deny  ",
+			buf, l->plen
+		);
+		l = l->next;
+	}
+
+	fprintf(stdout, "(implicit deny)\n");
+}
+
+int
+watchip_filter_finished(struct watchip_param *p, int verbose)
+{
+int n;
+
+	if (p->enable4) {
+		if (!(p->filter4)) {
+			if ((n = watchip_ip_filter_add(p, "!192.168.0.0/16,!172.16.0.0/12,!10.0.0.0/8")) > 0) {
+				return n;
+			}
+		}
+	} else {
+		if (p->filter4) {
+			fprintf(stderr, "%s: warning: at least one IPv4 address given in filter but IPv4 is disabled.\n", p->progname);
+			filter_free(p->filter4);
+			p->filter4 = NULL;
+		}
+	}
+
+	if (p->enable6) {
+		if (!(p->filter6)) {
+			if ((n = watchip_ip_filter_add(p, "!fc00::/7")) > 0) {
+				return n;
+			}
+		}
+	} else {
+		if (p->filter6) {
+			fprintf(stderr, "%s: warning: at least one IPv6 address given in filter but IPv6 is disabled.\n", p->progname);
+			filter_free(p->filter6);
+			p->filter4 = NULL;
+		}
+	}
+
+	if (!maybe_default_accept(&(p->filter4))) return 2;
+	if (!maybe_default_accept(&(p->filter6))) return 2;
+
+	p->filter4 = reverselist(p->filter4);
+	p->filter6 = reverselist(p->filter6);
+
+	if (verbose) {
+		fprintf(stdout, "IPv4 IP address filter:\n");
+		dumplist(p->filter4, AF_INET);
+
+		fprintf(stdout, "IPv6 IP address filter:\n");
+		dumplist(p->filter6, AF_INET6);
+	}
+	return 0;
+}
+
+static int
+ip_filter_match(struct ip_filter_list *l, unsigned char *a)
+{
+int mask;
+
+	for (; l; l = l->next) {
+		if (l->plen >= 8) {
+			if (memcmp(a, l->addr, l->plen >> 3)) continue;
+		}
+		if (l->plen & 7) {
+			mask = (~((256 >> (l->plen & 7)) - 1)) & 255;
+			if (
+				(l->addr[l->plen >> 3] & mask) !=
+				(a[l->plen >> 3] & mask)
+			) continue;
+		}
+		return l->accept;
+	}
+	return 0;	/* implicit deny */
+}
+
 static inline int
-validate6(int len, void *a)
+validate6(struct watchip *w, int len, void *a)
 {
 	if (len != 16) return 0;
 	if (IN6_IS_ADDR_LOOPBACK(a)) return 0;
 	if (IN6_IS_ADDR_MULTICAST(a)) return 0;
 	if (IN6_IS_ADDR_LINKLOCAL(a)) return 0;
-	return 1;
+
+	return ip_filter_match(w->filter6, a);
 }
 
 static inline int
-validate4(int len, unsigned char *a)
+validate4(struct watchip *w, int len, unsigned char *a)
 {
 	if (len != 4) return 0;
 	if ((*a) == 127) return 0;
 	if ((*a) == 0) return 0;
 	if ((*a) >= 224) return 0;
-	return 1;
+
+	return ip_filter_match(w->filter4, a);
 }
 
 static void
@@ -182,10 +471,10 @@ int ttl = -2;
 
 	switch (ifa->ifa_family) {
 		case AF_INET6:
-			if (!validate6(RTA_PAYLOAD(rta_addr), RTA_DATA(rta_addr))) return 1;
+			if (!validate6(w, RTA_PAYLOAD(rta_addr), RTA_DATA(rta_addr))) return 1;
 			break;
 		case AF_INET:
-			if (!validate4(RTA_PAYLOAD(rta_addr), RTA_DATA(rta_addr))) return 1;
+			if (!validate4(w, RTA_PAYLOAD(rta_addr), RTA_DATA(rta_addr))) return 1;
 			break;
 	}
 	return
@@ -305,8 +594,8 @@ request_addresses(struct watchip *w)
 {
 	w->pending_init = 0;
 	if ((w->filter_sense != 0) && (w->filter)) w->pending_init |= PENDINGLINK;
-	if (w->enable6) w->pending_init |= PENDING6;
-	if (w->enable4) w->pending_init |= PENDING4;
+	if (w->filter6) w->pending_init |= PENDING6;
+	if (w->filter4) w->pending_init |= PENDING4;
 	iplist_rebuild_start(w->iplist);
 	return request_one_dump(w);
 }
@@ -314,13 +603,10 @@ request_addresses(struct watchip *w)
 struct watchip *
 watchip_start(
 	struct iplist *ilist,
-	int enable4,
-	int enable6,
+	struct watchip_param *param,
 	int use_valid,
 	int default_ttl,
-	int max6_ttl,
-	int filter_sense,
-	struct filter_list *filter
+	int max6_ttl
 )
 {
 struct watchip *w;
@@ -335,13 +621,13 @@ int rcvbuf = 32768;
 
 	memset(w, 0, sizeof(*w));
 	w->iplist = ilist;
-	w->enable4 = enable4;
-	w->enable6 = enable6;
+	w->filter4 = param->filter4;
+	w->filter6 = param->filter6;
 	w->use_valid = use_valid;
 	w->default_ttl = default_ttl;
 	w->max6_ttl = max6_ttl;
-	w->filter_sense = filter_sense;
-	w->filter = filter;
+	w->filter_sense = param->intf_filter_sense;
+	w->filter = param->intf_filter;
 
 	if ((w->netlink_socket = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE)) < 0) {
 		perror("socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE)");
@@ -367,9 +653,9 @@ int rcvbuf = 32768;
 	bindaddr.nl_family = AF_NETLINK;
 	bindaddr.nl_groups = 0;
 
-	if ((filter_sense != 0) && (filter)) bindaddr.nl_groups |= 1 << (RTNLGRP_LINK-1);
-	if (enable6) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV6_IFADDR-1);
-	if (enable4) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV4_IFADDR-1);
+	if (((w->filter_sense) != 0) && (w->filter)) bindaddr.nl_groups |= 1 << (RTNLGRP_LINK-1);
+	if (w->filter6) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV6_IFADDR-1);
+	if (w->filter4) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV4_IFADDR-1);
 
 	if (bind(w->netlink_socket, (struct sockaddr *)(&bindaddr), sizeof(bindaddr)) < 0) {
 		perror("bind(..RTNLGRP_IPV4_IFADDR and/or RTNLGRP_IPV6_IFADDR..)");

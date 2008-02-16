@@ -1,0 +1,113 @@
+.TH AUTODDNS 8
+.SH NAME
+autoddns \- Watch configured IP addresses and sync them wth DNS
+.SH SYNOPSIS
+\fBautoddns\fR [\fB-4\fR|\fB-6\fR] [\fB-v\fR|\fB-d\fR] [\fB-V\fR] [\fB-t\fR \fIDNS_ttl\fR]
+[\fB-m\fR \fIDNS_ttl\fR] [\fB-h\fR \fIhostname\fR]
+[\fB-i\fR [\fB!\fR]\fIinterface\fR[,[\fB!\fR]\fIinterface\fR]]
+[\fB-a\fR [\fB!\fR]\fIipaddr\fB/\fIplen\fR[,[\fB!\fR]\fIipaddr\fB/\fIplen\fR]]
+-- \fInsupdate command line\fR
+.SH DESCRIPTION
+.PP
+.B autoddns
+is a daemon which keeps track of the IP addresses configured on the
+local system and keeps the host's DNS record up to date with those
+addresses using Dynamic DNS (DDNS).
+.PP
+In relies on the \fBnsupdate\fR(8) utility (which comes with BIND) to make
+the actual changes to DNS. \fBnsupdate\fR will be called using the command
+line embedded in the
+.B autoddns
+command line and the actual update will be passed to it on its standard input.
+.PP
+When
+.B autoddns
+first starts, all of the IP addresses associated with the host are deleted
+and replaced with a new set consisting of those that were learned by
+scanning the local interfaces. Subsequently, changes to configured IP
+addresses are noticed and submitted to
+.B nsupdate
+incrementally.
+.PP
+If the DNS name which is to be updated has a CNAME record, the target of
+the CNAME will be updated instead of the record itself (recursively).
+.SH OPTIONS
+.TP
+-4
+Enable IPv4 and disable IPv6 unless
+.B -6
+is also given. When IPv6 is disabled, IPv6 addresses on interfaces
+will be ignores, and DNS AAAA records will be left alone.
+By default, both IPv4 and IPv6 are enabled.
+.TP
+-6
+Enable IPv6 and disable IPv4 unless
+.B -4
+is also given. When IPv4 is disabled, IPv4 addresses on interfaces
+will be ignores, and DNS A records will be left alone.
+By default, both IPv4 and IPv6 are enabled.
+.TP
+-v
+Enable verbose mode. Many operations will be logged to stdout.
+Implies
+.B -d
+.TP
+-d
+Run in the forgreound without detaching from the terminal.
+.TP
+-V
+Use the valid lifetime of IP addresses instead of the prefered lifetime
+as the TTL for DNS records. This option applies only to IPv6 as IPv4
+addresses do not have lifetimes.
+.TP
+-t
+Use the given value for the DNS TTL of DNS records that are created.
+This option applies only to IPv4 as the address lifetime is used as
+the DNS TTL with IPv6.
+.TP
+-m
+For addresses with infinite lifetime, use the given value as the DNS
+TTL. This option applies only to IPv6 as IPv4 addresses do not have
+lifetimes.
+.TP
+-h
+Update the DNS record for the given name instead of the local hostname.
+.TP
+-i
+Select interfaces to monitor. By default, every interface is monitored.
+Interface names can be prefixed with \fB!\fR to exclude them or not
+prefixed to include them. Multiple interface names can either be given
+in multiple
+.B -i
+options or in a single
+.B -i
+option and seperated with \fB,\fR. If interfaces are to be exluded,
+then all other interfaces except the ones mentioned are included.
+If interfaces are to be included, then all other interfaces except
+the ones mentioned are excluded.
+.TP
+-a
+Select IP addresses to monitor.
+IP address specifications can be prefixed with \fB!\fR to exclude them or
+not prefixed to include them. Multiple IP address specifications can
+either be given in multiple
+.B -a
+options or in a single
+.B -i
+option and seperated with \fB,\fR. The filter for IPv4 addresses and IPv6
+addresses is maintained seperately. The default action in case no
+address specification matches an IP address depends on whether the last
+specification was an include (no \fB!\fR) or an exclude (has \fB!\fR). If the
+last specification was an include, then everything else will be excluded,
+else everything else will be included. Address specifications take the form
+\fIip-address\fB/\fIprefix-length\fR. By default, site local addresses are
+excluded and all others are included. If any filtering is requested, the
+default filter is not applied. Some addresses are always excluded even if
+they would be matched by the filter: loopback, link-local (IPv6 only),
+and multicast.
+.SH SEE ALSO
+.PP
+\fBnsupdate\fR(8)
+.SH AUTHOR
+.PP
+Written by Kim Vandry

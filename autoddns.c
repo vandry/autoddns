@@ -12,24 +12,6 @@
 #include "dnsquery.h"
 #include "dnsupdate.h"
 
-static int
-filter_add(struct filter_list **fp, char *descriptor)
-{
-char *p;
-
-	while (p = strchr(descriptor, ',')) {
-		*p = 0;
-		if (p > (descriptor+1)) {
-			if (!watchip_filter_add(fp, descriptor)) return 0;
-		}
-		descriptor = p+1;
-	}
-	if (*descriptor) {
-		if (!watchip_filter_add(fp, descriptor)) return 0;
-	}
-	return 1;
-}
-
 int
 main(int argc, char **argv)
 {
@@ -37,7 +19,6 @@ struct watchip *w;
 struct iplist *ipl;
 int err = 0;
 int c;
-int filter_sense = 0;
 int enable4 = 1;
 int enable6 = 1;
 int detach = 1;
@@ -48,25 +29,18 @@ int max6_ttl = 86400;
 int use_valid = 0;
 int pipefd[2];
 char *hostname = NULL;
-struct filter_list *intf_filter = NULL;
+struct watchip_param watchparam;
 
-	while ((c = getopt(argc, argv, "46t:m:Vvh:i:d")) != EOF) {
+	memset(&watchparam, 0, sizeof(watchparam));
+	watchparam.progname = argv[0];
+
+	while ((c = getopt(argc, argv, "46t:m:Vvh:i:a:d")) != EOF) {
 		switch (c) {
 			case 'i':
-				c = (optarg[0] == '!') ? -1 : 1;
-				if (filter_sense != 0 && (c != filter_sense)) {
-					fprintf(stderr,
-						"%s: cannot mix \"-i include\" with \"-i !exclude\"\n",
-						argv[0]
-					);
-					err = 1;
-					break;
-				}
-				filter_sense = c;
-				if (!filter_add(
-					&intf_filter,
-					optarg + ((filter_sense == -1) ? 1 : 0)
-				)) return 2;
+				if ((c = watchip_intf_filter_add(&watchparam, optarg)) > 0) return c;
+				break;
+			case 'a':
+				if ((c = watchip_ip_filter_add(&watchparam, optarg)) > 0) return c;
 				break;
 			case '4':
 				if (default_family) {
@@ -115,6 +89,10 @@ struct filter_list *intf_filter = NULL;
 	}
 	if (verbose) detach = 0;
 
+	watchparam.enable4 = enable4;
+	watchparam.enable6 = enable6;
+	if ((c = watchip_filter_finished(&watchparam, verbose)) > 0) return c;
+
 	if (enable4 && (default_ttl == -1)) {
 		err = 1;
 		fprintf(stderr, "%s: When IPv4 is enabled, a default TTL is required\n"
@@ -131,12 +109,14 @@ struct filter_list *intf_filter = NULL;
 	}
 	if (err || (optind == argc)) {
 		fprintf(stderr, "Usage: %s [-4|6] [-v|d] [-V] [-t DNS_ttl] [-m DNS_ttl] [-h hostname] \\\n"
-			"          [-i [!]interface[,interface]] -- nsupdate command line\n"
+			"          [-i [!]interface[,[!]interface]] [-a [!]ipaddr[,[!]ipaddr]] -- \\\n"
+			"          nsupdate command line\n"
 			" -4|6: Enable IPv4 or IPv6 (default is both enabled)\n"
 			"   -V: Use valid lifetime as DNS TTL instead of prefered lifetime\n"
 			"   -v: verbose (implies -d)\n"
 			"   -d: do not fork and detach into background\n"
 			"   -i: consider only named interfaces (with !, consider all except named)\n"
+			"   -a: filter to include/exclude IP addresses\n"
 			"   -t: Specify DNS TTL to use for IPv4 addresses\n"
 			"   -m: Specify DNS TTL to use for IPv6 addresses with infinite lifetime\n"
 			"   -h: Override the local hostname\n"
@@ -191,8 +171,7 @@ struct filter_list *intf_filter = NULL;
 	}
 
 	if (!(w = watchip_start(
-		ipl, enable4, enable6, use_valid, default_ttl, max6_ttl,
-		filter_sense, intf_filter
+		ipl, &watchparam, use_valid, default_ttl, max6_ttl
 	))) {
 		return 1;
 	}
