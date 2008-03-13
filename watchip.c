@@ -4,6 +4,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <linux/types.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <arpa/inet.h>
@@ -461,10 +462,13 @@ int ttl = -2;
 		}
 	}
 	if (ttl == -2) {
-		if (ifa->ifa_family == AF_INET6) {
-			return 1;	/* no lifetime information -- ignore address */
-		} else {
+		/* no lifetime information -- use default TTL if there is one */
+		if (w->default_ttl >= 0) {
+			/* For IPv4, a default TTL should always be supplied */
 			ttl = w->default_ttl;
+		} else {
+			/* else ignore the address */
+			return 1;
 		}
 	}
 	if (!rta_addr) return 1;
@@ -653,9 +657,30 @@ int rcvbuf = 32768;
 	bindaddr.nl_family = AF_NETLINK;
 	bindaddr.nl_groups = 0;
 
-	if (((w->filter_sense) != 0) && (w->filter)) bindaddr.nl_groups |= 1 << (RTNLGRP_LINK-1);
-	if (w->filter6) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV6_IFADDR-1);
-	if (w->filter4) bindaddr.nl_groups |= 1 << (RTNLGRP_IPV4_IFADDR-1);
+	if (((w->filter_sense) != 0) && (w->filter)) bindaddr.nl_groups |=
+#if defined(RTNLGRP_LINK)
+		1 << (RTNLGRP_LINK-1);
+#elif defined(RTMGRP_LINK)
+		RTMGRP_LINK;
+#else
+#error "Need either RTNLGRP_LINK or RTMGRP_LINK defined"
+#endif
+	if (w->filter6) bindaddr.nl_groups |=
+#if defined(RTNLGRP_IPV6_IFADDR)
+		1 << (RTNLGRP_IPV6_IFADDR-1);
+#elif defined(RTMGRP_IPV6_IFADDR)
+		RTMGRP_IPV6_IFADDR;
+#else
+#error "Need either RTNLGRP_IPV6_IFADDR or RTMGRP_IPV6_IFADDR defined"
+#endif
+	if (w->filter4) bindaddr.nl_groups |=
+#if defined(RTNLGRP_IPV4_IFADDR)
+		1 << (RTNLGRP_IPV4_IFADDR-1);
+#elif defined(RTMGRP_IPV4_IFADDR)
+		RTMGRP_IPV4_IFADDR;
+#else
+#error "Need either RTNLGRP_IPV4_IFADDR or RTMGRP_IPV4_IFADDR defined"
+#endif
 
 	if (bind(w->netlink_socket, (struct sockaddr *)(&bindaddr), sizeof(bindaddr)) < 0) {
 		perror("bind(..RTNLGRP_IPV4_IFADDR and/or RTNLGRP_IPV6_IFADDR..)");

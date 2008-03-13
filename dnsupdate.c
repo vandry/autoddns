@@ -20,7 +20,9 @@ static int
 update_with_list(struct ipl *todo, int verbose, char *override_hostname, char **argv)
 {
 char *hostname;
+#ifndef NO_DNS
 char *server;
+#endif
 int hostname_len, n;
 int total_len, written, pid;
 int pipefd[2];
@@ -43,6 +45,7 @@ char ipbuf[64];
 		return 0;
 	}
 
+#ifndef NO_DNS
 	if (!(server = soa_mname(hostname))) {
 		fprintf(stderr, "DNS update: cannot find server to which to send update\n");
 		free(hostname);
@@ -53,10 +56,16 @@ char ipbuf[64];
 		free(hostname);
 		return 0;
 	}
+#endif
 
 	hostname_len = strlen(hostname);
 		/* "server " + host + " 53\n" + blank line at the end */
-	total_len = 7 + strlen(server) + 4 + 1;
+	total_len =
+#ifdef NO_DNS
+		0;
+#else
+		7 + strlen(server) + 4 + 1;
+#endif
 	for (cur = todo; cur; cur = cur->next) {
 			/* "update delete " + host + " " + ttl + " aaaa (ffff:){7}ffff\n" */
 		total_len += 14 + hostname_len + 1 + 12 + 46;
@@ -65,12 +74,18 @@ char ipbuf[64];
 	if (!(buf = malloc(total_len))) {
 		fprintf(stderr, "DNS update: malloc failure\n");
 		free(hostname);
+#ifndef NO_DNS
 		free(server);
+#endif
 		return 0;
 	}
 
+#ifdef NO_DNS
+	p = buf;
+#else
 	sprintf(buf, "server %s 53\n", server);
 	p = buf + strlen(buf);
+#endif
 
 	for (cur = todo; cur; cur = cur->next) {
 		if (cur->ttl == -2) {
@@ -102,7 +117,9 @@ char ipbuf[64];
 		perror("DNS update: pipe");
 		free(buf);
 		free(hostname);
+#ifndef NO_DNS
 		free(server);
+#endif
 		return 0;
 	}
 
@@ -112,7 +129,9 @@ char ipbuf[64];
 		close(pipefd[1]);
 		free(buf);
 		free(hostname);
+#ifndef NO_DNS
 		free(server);
+#endif
 		return 0;
 	}
 
@@ -138,7 +157,9 @@ char ipbuf[64];
 			close(pipefd[1]);
 			free(buf);
 			free(hostname);
+#ifndef NO_DNS
 			free(server);
+#endif
 			return 0;
 		}
 		written += n;
@@ -147,7 +168,9 @@ char ipbuf[64];
 
 	free(buf);
 	free(hostname);
+#ifndef NO_DNS
 	free(server);
+#endif
 
 	for (;;) {
 		while (waitpid(pid, &n, 0) < 0) sleep(1);

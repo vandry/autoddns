@@ -137,6 +137,7 @@ int ttl;
 	return found;
 }
 
+#ifndef NO_DNS
 static int
 res_init_callback(struct dns_qcache *c)
 {
@@ -151,6 +152,7 @@ do_res_init(void)
 	if (!query_item('r', NULL, res_init_callback)) return 0;
 	return 1;
 }
+#endif
 
 static int
 local_hostname_callback(struct dns_qcache *c)
@@ -180,6 +182,7 @@ struct dns_qcache *c;
 	return c->value;
 }
 
+#ifndef NO_DNS
 static int
 domain_length(unsigned char *buf, int startpos, int len, int seed)
 {
@@ -362,15 +365,21 @@ unsigned char buf[4096];
 	if (verbose) fprintf(stderr, "DNS response incomplete (no answer or authority section)");
 	return -1;
 }
+#endif /* NO_DNS */
 
 char *
 canonical_hostname(void)
 {
 char *hostname;
+#ifndef NO_DNS
 struct dns_qcache *c;
 int tries = 8;
+#endif
 
 	if (!(hostname = local_hostname())) return NULL;
+#ifdef NO_DNS
+	return hostname;
+#else
 	if (!do_res_init()) return NULL;
 
 	while (tries-- > 0) {
@@ -381,8 +390,10 @@ int tries = 8;
 
 	fprintf(stderr, "Too many CNAMEs encountered while querying local hostname\n");
 	return NULL;
+#endif
 }
 
+#ifndef NO_DNS
 char *
 soa_mname(char *host)
 {
@@ -398,3 +409,4 @@ struct dns_qcache *c;
 	}
 	return NULL;
 }
+#endif
