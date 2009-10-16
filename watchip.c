@@ -281,6 +281,8 @@ int n;
 				return n;
 			}
 		}
+		if (!maybe_default_accept(&(p->filter4))) return 2;
+		p->filter4 = reverselist(p->filter4);
 	} else {
 		if (p->filter4) {
 			fprintf(stderr, "%s: warning: at least one IPv4 address given in filter but IPv4 is disabled.\n", p->progname);
@@ -295,6 +297,8 @@ int n;
 				return n;
 			}
 		}
+		if (!maybe_default_accept(&(p->filter6))) return 2;
+		p->filter6 = reverselist(p->filter6);
 	} else {
 		if (p->filter6) {
 			fprintf(stderr, "%s: warning: at least one IPv6 address given in filter but IPv6 is disabled.\n", p->progname);
@@ -302,12 +306,6 @@ int n;
 			p->filter4 = NULL;
 		}
 	}
-
-	if (!maybe_default_accept(&(p->filter4))) return 2;
-	if (!maybe_default_accept(&(p->filter6))) return 2;
-
-	p->filter4 = reverselist(p->filter4);
-	p->filter6 = reverselist(p->filter6);
 
 	if (verbose) {
 		fprintf(stdout, "IPv4 IP address filter:\n");
