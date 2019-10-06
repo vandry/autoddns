@@ -422,6 +422,7 @@ struct rtattr *rta;
 struct rtattr *rta_addr = NULL;
 struct ifa_cacheinfo *ci;
 int isremove = 0;
+uint32_t flags;
 int ttl = -2;
 
 	if ((n->nlmsg_type != RTM_NEWADDR) && (n->nlmsg_type != RTM_DELADDR))
@@ -430,8 +431,7 @@ int ttl = -2;
 	if (len < 0) return 1;
 
 	if (n->nlmsg_type == RTM_DELADDR) isremove = 1;
-	if (ifa->ifa_flags & IFA_F_TENTATIVE) isremove = 1;
-	if (ifa->ifa_flags & IFA_F_DEPRECATED) isremove = 1;
+	flags = ifa->ifa_flags;
 
 	if (!filter_match(w, ifa->ifa_index)) return 1;
 
@@ -459,6 +459,11 @@ int ttl = -2;
 			}
 			if (ci->ifa_prefered == 0) isremove = 1;
 			if (ci->ifa_valid == 0) isremove = 1;
+		} else if (rta->rta_type == IFA_FLAGS) {
+			/* This copy of the flags exist because the one in
+			   ifa->ifa_flags is only 8 bits. If we see this
+			   32 bit one, use it in preference. */
+			flags = *((uint32_t *)RTA_DATA(rta));
 		}
 	}
 	if (ttl == -2) {
@@ -471,6 +476,13 @@ int ttl = -2;
 			return 1;
 		}
 	}
+
+	if (flags & IFA_F_TENTATIVE) isremove = 1;
+	if (flags & IFA_F_DEPRECATED) isremove = 1;
+#ifdef IFA_F_NOPREFIXROUTE
+	if (flags & IFA_F_NOPREFIXROUTE) isremove = 1;
+#endif
+
 	if (!rta_addr) return 1;
 
 	switch (ifa->ifa_family) {
