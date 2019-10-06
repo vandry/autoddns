@@ -279,6 +279,7 @@ time_t retrytime;
 			}
 		}
 	}
+	return NULL;
 }
 
 int
