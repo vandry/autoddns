@@ -446,13 +446,15 @@ int ttl = -2;
 				if (ci->ifa_valid == -1) {
 					ttl = w->max6_ttl;
 				} else if (ci->ifa_valid >= 0) {
-					ttl = ci->ifa_valid;
+					ttl = (ci->ifa_valid > w->max6_ttl) ?
+						w->max6_ttl : ci->ifa_valid;
 				}
 			} else {
 				if (ci->ifa_prefered == -1) {
 					ttl = w->max6_ttl;
 				} else if (ci->ifa_prefered >= 0) {
-					ttl = ci->ifa_prefered;
+					ttl = (ci->ifa_prefered > w->max6_ttl) ?
+						w->max6_ttl : ci->ifa_prefered;
 				}
 			}
 			if (ci->ifa_prefered == 0) isremove = 1;
